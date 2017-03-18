@@ -7,9 +7,11 @@ process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 let request = require('request-promise');
 let spawn = require('child_process').spawn;
 let Q = require('q');
+let fs = require('fs');
 let _ = require('lodash');
-let desired_version = '3.7.48';
-let desired_version_regex = /3\.7\.48\..*/;
+let dateformat = require('dateformat');
+let desired_version = '3.7.49';
+let desired_version_regex = /3\.7\.49\..*/;
 let write = function () { process.stdout.write.apply(process.stdout, arguments) };
 
 //request.debug = true;
@@ -30,8 +32,12 @@ let dev;
 
 let upgrade_models = {
     '^(U7PG2|U7LR)$': 'uap2',
-    '^(BZ2LR)$': 'uap',
+    '^(U7P)$': 'uappro',
+    '^(BZ2|BZ2LR|U2IW|U7O)$': 'uap',
+    '^(U7E|U7Ev2)$': 'uapac',
 };
+
+try { fs.mkdirSync('logs'); } catch (e) {}
 
 request.post({
     url: `${base}:8443/api/login`, jar, json: true,
@@ -69,11 +75,16 @@ request.post({
     devs.sort((a, b) => { return a.ip.localeCompare(b.ip); });
     devs.forEach(dev => { console.log(dev._id, dev.ip, dev.version, dev.model); });
     dev = devs[0]; // TODO: index 0
+//throw new Error('bail!');
     saved_keys.forEach(key => {
         let value = dev[key];
         if (value)
             saved_config[key] = dev[key];
     });
+
+    let ts = dateformat(new Date(), 'yymmddhhMM');
+    fs.writeFileSync(`logs/${dev.ip}-${ts}.json`, JSON.stringify(saved_config));
+
     // console.log(dev);
     console.log('Off wlangroup:', wlangroup_off);
     console.log('saved:', saved_config);
@@ -108,10 +119,19 @@ request.post({
 })
 .then(() => {
     write('Rebooting AP...');
-    return request.post({
-        url: `${base}:8443/api/s/${site}/cmd/devmgr/restart`, jar, headers, json: true,
-        body: { mac: dev.mac, reboot_type: 'hard' },
-    });
+
+    let reboot_ap = () => {
+        return request.post({
+            url: `${base}:8443/api/s/${site}/cmd/devmgr/restart`, jar, headers, json: true,
+            body: { mac: dev.mac, reboot_type: 'hard' },
+        })
+        .catch(err => {
+            if (err.statusCode == 500) {
+                write('!');
+                return Q.delay(20000).then(reboot_ap);
+            } else throw err;
+        });
+    };
 })
 .then(() => {
     return wait_for_connected();
@@ -137,6 +157,12 @@ request.post({
             mac: dev.mac,
             url: `http://dl.ubnt-ut.com/${upgrade_model}-${desired_version}.bin`,
         },
+    })
+    .catch(err => {
+        if (err.statusCode != 500)
+            throw err;
+
+        write('\nUpgrade got error 500, but this is usually non-fatal...');
     });
 })
 .then(res => {
@@ -150,4 +176,8 @@ request.post({
         url: `${base}:8443/api/s/${site}/rest/device/${dev._id}`, jar, headers, json: true,
         body: saved_config,
     });
+})
+.catch(err => {
+    process.exitCode(1);
+    throw err;
 });
