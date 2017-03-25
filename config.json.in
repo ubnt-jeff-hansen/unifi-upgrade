@@ -2,5 +2,7 @@
   "base": "https://192.168.1.2",
   "site": "default",
   "username": "admin",
-  "password": ""
+  "password": "",
+  "tls_check_cert": false,
+  "skip_devices": []
 }
